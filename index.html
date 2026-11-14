@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>跑步步態分析・雙腳即時追蹤 V3</title>
+  <!-- 引入 MediaPipe Pose 與繪圖工具 -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+  <!-- 引入 Chart.js 用於即時波形圖 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg-dark: #0f172a;
+      --card-bg: #1e293b;
+      --accent: #38bdf8;
+      --accent-green: #10b981;
+      --accent-warn: #f59e0b;
+      --accent-danger: #ef4444;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
+    body { background-color: var(--bg-dark); color: var(--text-main); padding: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #334155; padding-bottom: 15px; flex-wrap: wrap; gap: 10px; }
+    h1 { font-size: 1.5rem; color: var(--accent); display: flex; align-items: center; gap: 10px; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    button, .file-label {
+      background: #334155; color: white; border: 1px solid #475569; padding: 8px 14px;
+      border-radius: 6px; cursor: pointer; font-size: 0.9rem; transition: 0.2s; display: inline-flex; align-items: center; gap: 6px;
+    }
+    button:hover, .file-label:hover { background: var(--accent); color: #0f172a; font-weight: 600; }
+    button.active { background: var(--accent-green); color: #0f172a; border-color: var(--accent-green); font-weight: bold; }
+    input[type="file"] { display: none; }
+
+    .main-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; }
+    @media (max-width: 960px) { .main-grid { grid-template-columns: 1fr; } }
+
+    .video-container {
+      position: relative; background: #000; border-radius: 12px; overflow: hidden;
+      border: 1px solid #334155; aspect-ratio: 16/9; max-height: 75vh; display: flex; align-items: center; justify-content: center;
+    }
+    video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    #outputCanvas { width: 100%; height: 100%; object-fit: contain; display:block; }
+    .overlay-badge {
+      position: absolute; top: 12px; left: 12px; background: rgba(15, 23, 42, 0.8);
+      padding: 6px 12px; border-radius: 20px; font-size: 0.8rem; border: 1px solid var(--accent);
+    }
+    .playback-bar {
+      display: flex; gap: 10px; align-items: center; margin-top: 10px; background: var(--card-bg);
+      padding: 10px 15px; border-radius: 8px; flex-wrap: wrap;
+    }
+
+    .dashboard { display: flex; flex-direction: column; gap: 15px; }
+    .metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .metric-card {
+      background: var(--card-bg); padding: 15px; border-radius: 10px; border-left: 4px solid var(--accent);
+    }
+    .metric-title { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px; }
+    .metric-value { font-size: 1.6rem; font-weight: 700; }
+    .metric-sub { font-size: 0.75rem; color: var(--accent-green); margin-top: 4px; }
+
+    .feedback-box {
+      background: var(--card-bg); padding: 15px; border-radius: 10px; border: 1px solid #334155;
+    }
+    .feedback-box h3 { font-size: 0.95rem; margin-bottom: 8px; color: var(--accent); }
+    #aiFeedback { font-size: 0.9rem; line-height: 1.5; color: #e2e8f0; }
+
+    .chart-box { background: var(--card-bg); padding: 15px; border-radius: 10px; height: 210px; }
+    .legend-toggles { display: flex; gap: 12px; font-size: 0.85rem; margin-left: auto; }
+    .legend-toggles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  button:disabled {opacity:.45;cursor:not-allowed} select {background:#0f172a;color:#f8fafc;padding:6px;border:1px solid #475569;border-radius:6px} .overlay-badge{max-width:calc(100% - 24px);pointer-events:none} .metric-sub{color:#94a3b8;line-height:1.5} .playback-bar label{font-size:.85rem} @media(max-width:600px){body{padding:12px}h1{font-size:1.15rem}.legend-toggles{margin-left:0;flex-wrap:wrap}.metric-value{font-size:1.4rem}}
+
+.main-grid{grid-template-columns:minmax(0,1.65fr) minmax(300px,1fr)}
+.main-grid>div{min-width:0}.video-container{aspect-ratio:auto;max-height:none;height:clamp(400px,68vh,840px)}
+#outputCanvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.bilateral{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}.bilateral b{font-size:1.3rem}.bilateral small{color:#94a3b8}.metric-value{font-size:1.35rem}.empty-state{position:absolute;text-align:center;color:#94a3b8;pointer-events:none;padding:24px;line-height:1.8}.overlay-badge{z-index:2}.legend-toggles{margin-left:0;flex-wrap:wrap}.metric-sub{overflow-wrap:anywhere}
+@media(max-width:960px){.main-grid{grid-template-columns:1fr}.video-container{height:clamp(360px,60vh,680px)}}
+
+.trajectory-panel{margin-top:14px;padding:18px;background:#1e293b;border:1px solid #334155;border-radius:12px}.trajectory-heading h2{font-size:1rem;color:#f8fafc}.trajectory-heading p,.trajectory-note{font-size:.78rem;color:#94a3b8;line-height:1.6;margin-top:6px}.trajectory-controls{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:14px 0;font-size:.85rem}.trajectory-controls label{display:flex;align-items:center;gap:6px}.trajectory-controls input{accent-color:#38bdf8}#trajectoryStatus{color:#94a3b8;font-size:.75rem;margin-left:auto}.trajectory-plot{height:320px;position:relative;background:#0f172a;border-radius:8px;overflow:hidden}#trajectoryCanvas{display:block;width:100%;height:100%}@media(max-width:600px){.trajectory-panel{padding:12px}.trajectory-plot{height:280px}#trajectoryStatus{margin-left:0;width:100%}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏃‍♂️ 跑步步態分析・雙腳即時追蹤 V3</h1>
+  <div class="controls">
+    <button id="btnWebcam">📷 開啟即時攝影機</button>
+    <label class="file-label">
+      📁 上傳跑步影片
+      <input type="file" id="videoUpload" accept="video/*" />
+    </label>
+    <button id="btnClearTrail">🧹 清除軌跡殘影</button>
+    <button id="btnExportCSV">📊 匯出 CSV 數據</button>
+  </div>
+</header>
+
+<div class="main-grid">
+  <!-- 左側：影像與骨架軌跡畫布 -->
+  <div>
+    <div class="video-container">
+      <div class="overlay-badge" id="statusBadge">系統就緒：請選擇攝影機或上傳側面跑步影片</div>
+      <video id="inputVideo" playsinline muted preload="auto"></video>
+      <canvas id="outputCanvas" width="1280" height="720"></canvas><div class="empty-state" id="emptyState">上傳側面跑步影片或開啟攝影機<br>左右腳軌跡顯示於下方圖表・角度即時疊加<br>保留原始人物比例，不拉寬或壓扁</div>
+    </div>
+    <div class="playback-bar">
+      <button id="btnPlayPause">⏯️ 播放 / 暫停</button>
+      <span>速度：</span>
+      <button class="speed-btn" data-speed="0.25">0.25x (慢動作)</button>
+      <button class="speed-btn" data-speed="0.5">0.5x</button>
+      <button class="speed-btn active" data-speed="1.0">1.0x</button>
+      <label>摘要側別 <select id="side"><option value="auto">自動選較清楚側</option><option value="left">左側</option><option value="right">右側</option></select></label>
+      <label>顯示比例 <select id="aspect"><option value="comfort">舒適高度</option><option value="source">原始比例</option><option value="4/3">4:3</option><option value="9/16">直式 9:16</option></select></label>
+      <label>畫面 <select id="fit"><option value="contain">完整顯示</option><option value="cover">填滿（裁切邊緣）</option></select></label>
+      <label><input type="checkbox" id="angles" checked> 即時角度</label>
+      <label><input type="checkbox" id="mirror"> 鏡像顯示</label>
+      <label><input type="checkbox" id="skeleton" checked> 骨架</label>
+      <div class="legend-toggles">
+        <label><input type="checkbox" id="overlayTrail"> 在影片疊加腳部軌跡</label>
+        <label><input type="checkbox" id="chkHipTrail"> 在影片顯示髖部軌跡</label>
+      </div>
+    </div>
+  <div class="playback-bar"><span id="timeLabel">00:00 / 00:00</span><input id="seek" type="range" min="0" max="100" step="0.01" value="0" disabled style="flex:1;min-width:120px" aria-label="影片進度"></div>
+    <section class="trajectory-panel" aria-labelledby="trajectoryTitle">
+      <div class="trajectory-heading"><div><h2 id="trajectoryTitle">左右腳移動軌跡</h2><p>追蹤腳踝位置，與影片方向一致；空心點為起點，實心點為最新位置。</p></div></div>
+      <div class="trajectory-controls">
+        <label style="color:#38bdf8"><input type="checkbox" id="chkAnkleTrail" checked> 左腳</label>
+        <label style="color:#f472b6"><input type="checkbox" id="chkRightTrail" checked> 右腳</label>
+        <label>顯示最近 <select id="trailDuration"><option value="1.5">1.5 秒</option><option value="3" selected>3 秒</option><option value="5">5 秒</option></select></label>
+        <span id="trajectoryStatus" role="status">播放影片後顯示軌跡</span>
+      </div>
+      <div class="trajectory-plot"><canvas id="trajectoryCanvas" role="img" aria-label="左右腳腳踝移動軌跡，橫軸為影像水平位置，縱軸為影像垂直位置"></canvas></div>
+      <p class="trajectory-note">座標為原始影像百分比，Y 軸向下增加；顯示二維移動路徑，不代表實際步幅或距離。</p>
+    </section>
+  </div>
+  <!-- 右側：數據儀表板與 AI 診斷 -->
+  <div class="dashboard">
+    <div class="feedback-box"><strong>左右腳即時角度</strong><div class="bilateral"><div style="color:#38bdf8">左膝 <b id="leftKnee">等待偵測</b><br><small id="leftQuality">請先開啟影片</small></div><div style="color:#f472b6">右膝 <b id="rightKnee">等待偵測</b><br><small id="rightQuality">請先開啟影片</small></div></div><p class="metric-sub">膝關節內夾角：腿伸直約 180°；兩側獨立計算。</p></div>
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-title">即時步頻 (Cadence)</div>
+        <div class="metric-value" id="valCadence">-- <span style="font-size:0.9rem">spm</span></div>
+        <div class="metric-sub" id="cadenceHint">需至少 3 個同側週期；靜止時不產生步頻</div>
+      </div>
+      <div class="metric-card" style="border-left-color: var(--accent-green);">
+        <div class="metric-title">軀幹前傾角 (Trunk Lean)</div>
+        <div class="metric-value" id="valTrunk">--°</div>
+        <div class="metric-sub">肩髖連線相對垂直線的傾角</div>
+      </div>
+      <div class="metric-card" style="border-left-color: var(--accent-warn);">
+        <div class="metric-title">膝關節內夾角（伸直約 180°）</div>
+        <div class="metric-value" id="valKnee">--°</div>
+        <div class="metric-sub" id="subKnee">依選定側別計算</div>
+      </div>
+      <div class="metric-card" style="border-left-color: #a855f7;">
+        <div class="metric-title">髖部垂直振幅（影像像素）</div>
+        <div class="metric-value" id="valOscillation">-- <span style="font-size:0.9rem">px</span></div>
+        <div class="metric-sub"><span id="oscHint">需累積至少 0.5 秒；非真實重心位移</span></div>
+      </div>
+    </div>
+
+    <div class="feedback-box">
+      <h3>🤖 偵測品質與動作觀察</h3>
+      <div id="aiFeedback">等待骨架偵測中... 建議使用「側面視角（Sagittal Plane）」拍攝全身跑步畫面以獲得最準確的角度分析。</div>
+    </div>
+
+    <div class="chart-box">
+      <canvas id="kinematicChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id), video=$('inputVideo'), canvas=$('outputCanvas'), ctx=canvas.getContext('2d');
+const inferenceCanvas=document.createElement('canvas'),inferenceCtx=inferenceCanvas.getContext('2d');
+const resultCanvas=document.createElement('canvas'),resultCtx=resultCanvas.getContext('2d');
+let initPromise=null;
+let pose=null, chart=null, mode='', stream=null, sourceURL=null, epoch=0, busy=false, lastTime=-1, frameTime=0, frameEpoch=0;
+let rows=[],selected=null,lastChart=-1,lastSample=-1,latest=null,lastResult=null;
+const sides={left:[11,23,25,27,29,31],right:[12,24,26,28,30,32]}, colors={left:'#38bdf8',right:'#f472b6'};
+const links=[[11,12],[11,23],[12,24],[23,24],[23,25],[25,27],[27,29],[29,31],[31,27],[24,26],[26,28],[28,30],[30,32],[32,28]];
+const fresh=()=>({trail:[],hipTrail:[],hips:[],wave:[],peaks:[],last:null,knee:null,trunk:null,osc:null,cadence:null,q:0,ankle:null});
+let states={left:fresh(),right:fresh()};
+function status(s){$('statusBadge').textContent=s;}
+function missing(){for(const id of ['valKnee','valTrunk','valCadence','valOscillation','leftKnee','rightKnee']) $(id).textContent='等待偵測';}
+function reset(){rows=[];states={left:fresh(),right:fresh()};selected=null;lastTime=-1;lastChart=-1;lastSample=-1;latest=null;lastResult=null;missing();ctx.clearRect(0,0,canvas.width,canvas.height);drawTrajectory();if(chart){chart.data.labels=[];chart.data.datasets.forEach(d=>d.data=[]);chart.update('none');}}
+function layout(){const box=canvas.parentElement,ratio=$('aspect').value;box.style.height=ratio==='comfort'?'': 'auto';box.style.aspectRatio=ratio==='comfort'?'auto':ratio==='source'?`${canvas.width}/${canvas.height}`:ratio;canvas.style.objectFit=$('fit').value;}
+function dimensions(){const w=video.videoWidth||canvas.width,h=video.videoHeight||canvas.height;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;layout();}}
+function visible(p){return !!p&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&(p.visibility??0)>=.5&&p.x>=0&&p.x<=1&&p.y>=0&&p.y<=1;}
+function pixel(p){return {x:p.x*canvas.width,y:p.y*canvas.height};}
+function angle(a,b,c){const u={x:a.x-b.x,y:a.y-b.y},v={x:c.x-b.x,y:c.y-b.y};const n=Math.hypot(u.x,u.y)*Math.hypot(v.x,v.y);return n>1e-6?Math.acos(Math.max(-1,Math.min(1,(u.x*v.x+u.y*v.y)/n)))*180/Math.PI:null;}
+function quality(lm,side){return Math.min(...sides[side].slice(1,4).map(i=>visible(lm[i])?lm[i].visibility:0));}
+function line(points,color,width){if(points.length<2)return;ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=width;points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();}
+function textAt(text,p,color){const w=canvas.width,h=canvas.height,size=Math.max(16,w/65);ctx.save();ctx.font=`600 ${size}px system-ui`;const tw=ctx.measureText(text).width;let x=Math.min(w-tw-12,Math.max(8,p.x+12)),y=Math.min(h-size-8,Math.max(size+8,p.y-12));if($('mirror').checked){ctx.translate(w,0);ctx.scale(-1,1);x=Math.min(w-tw-12,Math.max(8,w-p.x+12));}ctx.fillStyle='rgba(15,23,42,.88)';ctx.fillRect(x-5,y-size,tw+10,size+9);ctx.fillStyle=color;ctx.fillText(text,x,y);ctx.restore();}
+function draw(image,lm){dimensions();const w=canvas.width,h=canvas.height;ctx.save();ctx.clearRect(0,0,w,h);if($('mirror').checked){ctx.translate(w,0);ctx.scale(-1,1);}ctx.drawImage(image,0,0,w,h);$('emptyState').hidden=true;
+for(const side of ['left','right']){const st=states[side],enabled=$('overlayTrail').checked&&$(side==='left'?'chkAnkleTrail':'chkRightTrail').checked;if(enabled)line(st.trail,colors[side],Math.max(2,w/450));if($('chkHipTrail').checked)line(st.hipTrail,'#facc15',2);}
+if(lm&&$('skeleton').checked){for(const [a,b]of links)if(visible(lm[a])&&visible(lm[b])){const side=sides.left.includes(a)&&sides.left.includes(b)?'left':sides.right.includes(a)&&sides.right.includes(b)?'right':null;line([pixel(lm[a]),pixel(lm[b])],side?colors[side]:'#cbd5e1',Math.max(2,w/500));}for(const i of [...new Set(links.flat())])if(visible(lm[i])){const p=pixel(lm[i]);ctx.beginPath();ctx.arc(p.x,p.y,Math.max(3,w/250),0,Math.PI*2);ctx.fillStyle=sides.left.includes(i)?colors.left:colors.right;ctx.fill();}}
+if(lm&&$('angles').checked)for(const side of ['left','right']){const st=states[side],ids=sides[side];if(st.knee!==null&&visible(lm[ids[2]]))textAt(`${side==='left'?'左膝':'右膝'} ${st.knee.toFixed(1)}°`,pixel(lm[ids[2]]),colors[side]);if(st.trunk!==null&&visible(lm[ids[0]]))textAt(`${side==='left'?'左':'右'}軀幹 ${st.trunk.toFixed(1)}°`,pixel(lm[ids[0]]),'#34d399');}
+ctx.restore();drawTrajectory();}
+function sampleSide(lm,side,t){let st=states[side];if(st.last!==null&&(t-st.last>.5||t<st.last)){st=fresh();states[side]=st;}st.last=t;
+st.trail=st.trail.filter(p=>t-p.t<Number($('trailDuration').value));st.hipTrail=st.hipTrail.filter(p=>t-p.t<Number($('trailDuration').value));st.q=quality(lm,side);st.knee=null;st.trunk=null;st.osc=null;st.ankle=null;
+const [si,hi,ki,ai]=sides[side],s=lm[si],h=lm[hi],k=lm[ki],a=lm[ai];
+if([h,k,a].every(visible))st.knee=angle(pixel(h),pixel(k),pixel(a));
+if([s,h].every(visible)){const sp=pixel(s),hp=pixel(h);st.trunk=Math.abs(Math.atan2(sp.x-hp.x,hp.y-sp.y)*180/Math.PI);}
+if(visible(a)){st.ankle=pixel(a);st.trail.push({...st.ankle,t});st.trail=st.trail.slice(-600);}else st.trail=[];
+if(visible(h)){const hp=pixel(h);st.hipTrail.push({...hp,t});st.hipTrail=st.hipTrail.slice(-600);st.hips.push({t,y:hp.y});st.hips=st.hips.filter(p=>t-p.t<=2);if(st.hips.length>2&&t-st.hips[0].t>=.5)st.osc=Math.max(...st.hips.map(p=>p.y))-Math.min(...st.hips.map(p=>p.y));}else{st.hips=[];st.hipTrail=[];}
+st.cadence=null;
+if([h,a].every(visible)){const y=(a.y-h.y)*canvas.height,smooth=st.wave.length?st.wave.at(-1).y*.4+y*.6:y;st.wave.push({t,y:smooth});st.wave=st.wave.filter(p=>t-p.t<=1.8);
+if(st.wave.length>=3){const aa=st.wave.at(-3),b=st.wave.at(-2),c=st.wave.at(-1),span=Math.max(...st.wave.map(p=>p.y))-Math.min(...st.wave.map(p=>p.y));if(aa.y<b.y&&b.y>=c.y&&span>canvas.height*.015&&(!st.peaks.length||b.t-st.peaks.at(-1)>.38))st.peaks.push(b.t);}
+st.peaks=st.peaks.filter(p=>t-p<=8);if(st.peaks.length>=4&&t-st.peaks.at(-1)<1.8){const intervals=st.peaks.slice(1).map((p,i)=>p-st.peaks[i]),mean=intervals.reduce((a,b)=>a+b,0)/intervals.length,cv=Math.sqrt(intervals.reduce((v,x)=>v+(x-mean)**2,0)/intervals.length)/mean,estimate=120/mean;if(cv<.25&&estimate>=60&&estimate<=240)st.cadence=Math.round(estimate);}
+}else{st.wave=[];st.peaks=[];}
+}
+function results(r){if(frameEpoch!==epoch)return;dimensions();resultCanvas.width=canvas.width;resultCanvas.height=canvas.height;resultCtx.drawImage(r.image,0,0,resultCanvas.width,resultCanvas.height);lastResult={...r,image:resultCanvas};const lm=r.poseLandmarks,t=frameTime;if(lm)for(const side of ['left','right'])sampleSide(lm,side,t);else states={left:fresh(),right:fresh()};render(lastResult,true);}
+function render(r,record){const lm=r.poseLandmarks,t=frameTime;let side=$('side').value;if(side==='auto'){side=selected||'left';const other=side==='left'?'right':'left';if(states[other].q>states[side].q+.12||states[side].q<.5&&states[other].q>=.5)side=other;}selected=side;const st=states[side],other=states[side==='left'?'right':'left'];
+for(const name of ['left','right']){const s=states[name];$(name+'Knee').textContent=s.knee===null?'未辨識':`${s.knee.toFixed(1)}°`;$(name+'Quality').textContent=s.q>=.5?`腿部信心 ${Math.round(s.q*100)}%`:'髖、膝或腳踝被遮擋';}
+const trunk=st.trunk??($('side').value==='auto'?other.trunk:null),osc=st.osc??($('side').value==='auto'?other.osc:null),cadence=st.cadence??($('side').value==='auto'?other.cadence:null);
+$('valKnee').textContent=st.knee===null?'腿部未辨識':`${st.knee.toFixed(1)}°`;$('valTrunk').textContent=trunk===null?'肩髖未辨識':`${trunk.toFixed(1)}°`;$('valOscillation').textContent=osc===null?'累積影像中':`${osc.toFixed(1)} px`;$('valCadence').textContent=cadence===null?'等待規律步態':`${cadence} spm`;
+$('cadenceHint').textContent=cadence===null?`已偵測 ${Math.max(0,st.peaks.length-1)} 個同側週期，至少需 3 個規律週期；需持續跑動`:'依影片時間估算，慢動作不改變步頻值';$('oscHint').textContent=osc===null?'髖部需連續可見至少 0.5 秒':'近 2 秒的影像像素範圍；不是公分';$('subKnee').textContent=`摘要：${side==='left'?'左':'右'}膝；左右完整數值見上方`;
+status(lm?`偵測中 · 左膝 ${states.left.knee===null?'未辨識':'✓'}／右膝 ${states.right.knee===null?'未辨識':'✓'} · ${rows.length} 筆`:'未偵測到人體，請讓全身與雙腳完整入鏡');
+const notes=[];if(!lm)notes.push('沒有偵測到人體。');else{if(states.left.knee===null)notes.push('左膝需同時看見左髖、左膝及左腳踝。');if(states.right.knee===null)notes.push('右膝需同時看見右髖、右膝及右腳踝。');if(trunk===null)notes.push('軀幹角度需肩與髖清楚入鏡。');if(cadence===null)notes.push('步頻不會在靜止、週期不足或遮擋時產生。');}notes.push('角度為二維影像估算；側面拍攝時遠側腿可能被遮擋。');if(!chart)notes.push('圖表套件未載入，其餘數值及 CSV 仍可使用。');$('aiFeedback').textContent=notes.join(' ');
+const valid=Object.values(states).some(s=>s.knee!==null||s.trunk!==null||s.ankle!==null||s.osc!==null);
+latest={time:t,side,leftKnee:states.left.knee,rightKnee:states.right.knee,knee:st.knee,trunk,oscillation:osc,cadence,confidence:Math.round(st.q*100),leftAnkleX:states.left.ankle?.x??null,leftAnkleY:states.left.ankle?.y??null,rightAnkleX:states.right.ankle?.x??null,rightAnkleY:states.right.ankle?.y??null};
+if(record&&valid&&t-lastSample>=.095){rows.push(latest);lastSample=t;if(rows.length>=100000){video.pause();status('已達記錄上限，請先匯出 CSV');}}
+if(record&&chart&&t-lastChart>=.1){chart.data.labels.push(t.toFixed(2));[states.left.knee,states.right.knee,trunk].forEach((v,i)=>chart.data.datasets[i].data.push(v));if(chart.data.labels.length>100){chart.data.labels.shift();chart.data.datasets.forEach(d=>d.data.shift());}chart.update('none');lastChart=t;}
+draw(r.image,lm);
+}
+
+async function init(){if(initPromise)return initPromise;initPromise=(async()=>{if(typeof Pose==='undefined')throw Error('姿態套件載入失敗，請確認網路後重新整理');status('正在載入姿態模型，首次啟動可能需要數秒…');pose=new Pose({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${f}`});pose.setOptions({modelComplexity:1,smoothLandmarks:true,minDetectionConfidence:.5,minTrackingConfidence:.5});pose.onResults(results);await pose.initialize();})();try{await initPromise;}catch(e){pose=null;initPromise=null;throw Error('模型載入失敗，請確認網路後重新整理（'+e.message+'）');}}
+function stop(){epoch++;video.pause();if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}video.srcObject=null;video.removeAttribute('src');video.load();$('emptyState').hidden=false;$('btnWebcam').textContent='📷 開啟即時攝影機';if(sourceURL){URL.revokeObjectURL(sourceURL);sourceURL=null;}mode='';reset();}
+function failure(e){status(`無法分析：${e.message||e}`);$('aiFeedback').textContent='請檢查網路、相機權限與影片格式。攝影機需使用 HTTPS 或 localhost 開啟。';}
+async function chooseFile(file){if(!file)return;stop();const token=epoch;try{await init();if(token!==epoch)return;sourceURL=URL.createObjectURL(file);mode='file';video.src=sourceURL;video.loop=false;video.muted=true;video.playbackRate=Number(document.querySelector('.speed-btn.active').dataset.speed);await video.play();if(token!==epoch)return;status(`影片已開啟：${file.name}`);}catch(e){failure(e);}}
+$('videoUpload').onchange=e=>{chooseFile(e.target.files[0]);e.target.value='';};
+$('btnWebcam').onclick=async()=>{if(mode==='camera'){stop();status('攝影機已關閉');$('btnWebcam').textContent='📷 開啟即時攝影機';return;}stop();const token=epoch;try{if(!navigator.mediaDevices?.getUserMedia)throw Error('瀏覽器不支援攝影機，請用 HTTPS 或 localhost');await init();if(token!==epoch)return;const s=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720},facingMode:'environment'},audio:false});if(token!==epoch){s.getTracks().forEach(t=>t.stop());return;}stream=s;mode='camera';video.srcObject=s;video.playbackRate=1;await video.play();$('btnWebcam').textContent='關閉攝影機';}catch(e){failure(e);}};
+// 單一推論迴圈，不重複送幀，也不將新影片的畫面與舊結果混用。
+async function tick(){if(!busy&&mode&&pose&&video.readyState>=2&&!video.seeking&&!video.paused&&!video.ended){const t=video.currentTime;if(t!==lastTime){busy=true;frameTime=t;frameEpoch=epoch;lastTime=t;try{dimensions();if(inferenceCanvas.width!==canvas.width||inferenceCanvas.height!==canvas.height){inferenceCanvas.width=canvas.width;inferenceCanvas.height=canvas.height;}inferenceCtx.drawImage(video,0,0,inferenceCanvas.width,inferenceCanvas.height);await pose.send({image:inferenceCanvas});}catch(e){video.pause();failure(e);}finally{busy=false;}}}updateTime();requestAnimationFrame(tick);}
+function fmt(t){return Number.isFinite(t)?`${Math.floor(t/60).toString().padStart(2,'0')}:${Math.floor(t%60).toString().padStart(2,'0')}`:'00:00';}
+function updateTime(){const file=mode==='file',d=video.duration;$('seek').disabled=!file||!Number.isFinite(d);$('timeLabel').textContent=`${fmt(video.currentTime)} / ${file?fmt(d):'即時'}`;if(file&&Number.isFinite(d)){$('seek').max=d;$('seek').value=video.currentTime;}$('btnPlayPause').textContent=video.paused?'▶ 播放':'⏸ 暫停';}
+$('seek').oninput=e=>{if(mode==='file'){epoch++;video.currentTime=Number(e.target.value);reset();status('已跳轉，重新累積數據');}};
+video.onseeked=()=>{if(video.paused&&video.readyState>=2)draw(video,null);};video.onended=()=>status(`分析完成 · ${rows.length} 筆，可匯出 CSV`);video.onerror=()=>failure(Error('無法解碼影片，請改用瀏覽器支援的 MP4（H.264）或 WebM'));
+$('btnPlayPause').onclick=async()=>{if(!mode)return;try{if(video.ended){epoch++;reset();video.currentTime=0;}if(video.paused)await video.play();else video.pause();}catch(e){failure(e);}};
+document.querySelectorAll('.speed-btn').forEach(b=>b.onclick=()=>{document.querySelectorAll('.speed-btn').forEach(x=>x.classList.toggle('active',x===b));if(mode!=='camera')video.playbackRate=Number(b.dataset.speed);});
+$('side').onchange=()=>{selected=null;if(lastResult)render(lastResult, false);};
+$('btnClearTrail').onclick=()=>{for(const st of Object.values(states)){st.trail=[];st.hipTrail=[];}if(lastResult)draw(lastResult.image,lastResult.poseLandmarks);};
+$('btnExportCSV').onclick=()=>{if(!rows.length){status('目前沒有有效數據，請先播放有全身入鏡的影片');return;}const keys=['time','side','leftKnee','rightKnee','knee','trunk','oscillation','cadence','confidence','leftAnkleX','leftAnkleY','rightAnkleX','rightAnkleY'];const header='Time(s),SummarySide,LeftKnee(deg),RightKnee(deg),SummaryKnee(deg),TrunkTilt(deg),HipRange2s(px),Cadence(spm),LegConfidence(%),LeftAnkleX(px),LeftAnkleY(px),RightAnkleX(px),RightAnkleY(px)';const csv='\uFEFF'+header+'\r\n'+rows.map(r=>keys.map(k=>r[k]==null?'':typeof r[k]==='number'?r[k].toFixed(3):r[k]).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='running_gait_analysis.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+if(typeof Chart!=='undefined'){chart=new Chart($('kinematicChart'),{type:'line',data:{labels:[],datasets:[{label:'左膝 °',data:[],borderColor:'#38bdf8',pointRadius:0},{label:'右膝 °',data:[],borderColor:'#f472b6',pointRadius:0},{label:'軀幹傾角 °',data:[],borderColor:'#10b981',pointRadius:0}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{x:{display:false},y:{min:0,max:180,ticks:{color:'#94a3b8'},grid:{color:'#334155'}}},plugins:{legend:{labels:{color:'#f8fafc'}}}}});}else{$('aiFeedback').textContent='圖表套件載入失敗；仍可進行姿態分析、顯示數值及匯出 CSV。';}
+for(const id of ['aspect','fit','mirror','skeleton','angles','chkAnkleTrail','chkRightTrail','chkHipTrail','overlayTrail','trailDuration'])$(id).onchange=()=>{layout();if(lastResult)draw(lastResult.image,lastResult.poseLandmarks);else drawTrajectory();};
+function drawTrajectory(){
+ const plot=$('trajectoryCanvas');if(!plot)return;const box=plot.getBoundingClientRect();if(!box.width||!box.height)return;
+ const dpr=Math.min(window.devicePixelRatio||1,2),w=box.width,h=box.height;
+ if(plot.width!==Math.round(w*dpr)||plot.height!==Math.round(h*dpr)){plot.width=Math.round(w*dpr);plot.height=Math.round(h*dpr);}
+ const c=plot.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,w,h);
+ const margin={left:44,right:18,top:22,bottom:38},aw=w-margin.left-margin.right,ah=h-margin.top-margin.bottom;
+ // Keep equal scale in both axes so the chart does not distort the original motion.
+ const scale=Math.min(aw/canvas.width,ah/canvas.height),pw=canvas.width*scale,ph=canvas.height*scale;
+ const x0=margin.left+(aw-pw)/2,y0=margin.top+(ah-ph)/2;
+ c.font='11px system-ui';c.textAlign='center';c.textBaseline='middle';
+ for(let i=0;i<=4;i++){const u=i/4,x=x0+pw*u,y=y0+ph*u;c.strokeStyle='#29384f';c.lineWidth=1;c.beginPath();c.moveTo(x,y0);c.lineTo(x,y0+ph);c.moveTo(x0,y);c.lineTo(x0+pw,y);c.stroke();c.fillStyle='#94a3b8';c.fillText(`${i*25}%`,x,y0+ph+16);c.textAlign='right';c.fillText(`${i*25}%`,x0-8,y);c.textAlign='center';}
+ c.strokeStyle='#64748b';c.strokeRect(x0,y0,pw,ph);c.fillStyle='#94a3b8';c.fillText('水平位置 X',x0+pw/2,h-8);c.save();c.translate(12,y0+ph/2);c.rotate(-Math.PI/2);c.fillText('垂直位置 Y ↓',0,0);c.restore();
+ const seconds=Number($('trailDuration').value),counts=[];let total=0;
+ c.save();c.beginPath();c.rect(x0,y0,pw,ph);c.clip();
+ for(const side of ['left','right']){const enabled=$(side==='left'?'chkAnkleTrail':'chkRightTrail').checked;
+ const pts=states[side].trail.filter(p=>frameTime-p.t<=seconds),label=side==='left'?'左':'右';counts.push(`${label} ${enabled?pts.length:'隱藏'}`);if(!enabled||!pts.length)continue;total+=pts.length;
+ const project=p=>({x:x0+($('mirror').checked?canvas.width-p.x:p.x)*scale,y:y0+p.y*scale});
+ for(let i=1;i<pts.length;i++){// Skip occlusion gaps instead of connecting unrelated positions.
+ if(pts[i].t-pts[i-1].t>.5)continue;const a=project(pts[i-1]),b=project(pts[i]);c.strokeStyle=colors[side];c.globalAlpha=.18+.82*i/pts.length;c.lineWidth=2.4;c.lineJoin='round';c.lineCap='round';c.beginPath();c.moveTo(a.x,a.y);c.lineTo(b.x,b.y);c.stroke();}
+ c.globalAlpha=1;c.strokeStyle=colors[side];c.lineWidth=2;const first=project(pts[0]),last=project(pts.at(-1));c.beginPath();c.arc(first.x,first.y,4,0,Math.PI*2);c.stroke();c.fillStyle=colors[side];c.beginPath();c.arc(last.x,last.y,5,0,Math.PI*2);c.fill();
+ }
+ c.restore();c.globalAlpha=1;if(!total){c.fillStyle='#cbd5e1';c.font='13px system-ui';c.textAlign='center';c.fillText(lastResult?'目前沒有可顯示的腳部軌跡':'播放影片後，左右腳軌跡會顯示在這裡',x0+pw/2,y0+ph/2);}
+ $('trajectoryStatus').textContent=`近 ${seconds} 秒 · ${counts.join('／')}`;
+}
+const trajectoryObserver=new ResizeObserver(()=>drawTrajectory());trajectoryObserver.observe($('trajectoryCanvas').parentElement);
+
+layout();missing();drawTrajectory();requestAnimationFrame(tick);
+</script>
+
+</body></html>
